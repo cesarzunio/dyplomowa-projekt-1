@@ -1,0 +1,299 @@
+public unsafe struct RawGeoQueue<T> where T : unmanaged, IEquatable<T>
+{
+    [NativeDisableUnsafePtrRestriction]
+    T* _heap;
+
+    UnsafeHashMap<T, double> _costs;
+    UnsafeHashMap<T, int> _indexInHeap;
+    int _count;
+    int _capacity;
+
+    readonly Allocator _allocator;
+
+    public readonly int Count => _count;
+
+    public RawGeoQueue(int capacity, int hashMapsCapacity, Allocator allocator)
+    {
+        _heap = null;
+        _costs = new UnsafeHashMap<T, double>(hashMapsCapacity, allocator);
+        _indexInHeap = new UnsafeHashMap<T, int>(hashMapsCapacity, allocator);
+
+        _count = 0;
+        _capacity = 0;
+        _allocator = allocator;
+
+        SetCapacity(capacity);
+    }
+
+    public void Add(T item, double cost)
+    {
+        if (_count == _capacity)
+            SetCapacity(_capacity * 2);
+
+        _heap[_count++] = item;
+        _costs[item] = cost;
+        _indexInHeap[item] = _count - 1;
+
+        HeapifyUp(_count - 1);
+    }
+
+    public void AddOrUpdate(T item, double cost)
+    {
+        if (_indexInHeap.TryGetValue(item, out int index))
+        {
+            _costs[item] = cost;
+            HeapifyUp(index);
+            return;
+        }
+
+        Add(item, cost);
+    }
+
+    public T Pop()
+    {
+        var root = _heap[0];
+
+        _heap[0] = _heap[_count - 1];
+        _indexInHeap[_heap[0]] = 0;
+
+        _count--;
+        _indexInHeap.Remove(root);
+
+        HeapifyDown(0);
+
+        return root;
+    }
+
+    public bool TryPop(out T item)
+    {
+        if (Count == 0)
+        {
+            item = default;
+            return false;
+        }
+
+        item = Pop();
+        return true;
+    }
+
+    public void Clear()
+    {
+        _count = 0;
+        _costs.Clear();
+        _indexInHeap.Clear();
+    }
+
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    public double GetCost(T item) => _costs[item];
+
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    public bool TryGetCost(T item, out double cost) => _costs.TryGetValue(item, out cost);
+
+    public void Dispose()
+    {
+        UnsafeUtility.Free(_heap, _allocator);
+        _heap = null;
+
+        _costs.Dispose();
+        _indexInHeap.Dispose();
+    }
+
+    void HeapifyUp(int index)
+    {
+        if (index < 0 || index > _count - 1)
+            return;
+
+        var item = _heap[index];
+
+        while (index > 0)
+        {
+            int parentIndex = (index - 1) / 2;
+            var parentItem = _heap[parentIndex];
+
+            if (IsLowerCost(item, parentItem))
+            {
+                _indexInHeap[item] = parentIndex;
+                _indexInHeap[parentItem] = index;
+
+                (_heap[index], _heap[parentIndex]) = (_heap[parentIndex], _heap[index]);
+
+                index = parentIndex;
+            }
+            else
+            {
+                break;
+            }
+        }
+    }
+
+    void HeapifyDown(int index)
+    {
+        int lastIndex = _count - 1;
+
+        while (true)
+        {
+            int leftChildIndex = 2 * index + 1;
+            int rightChildIndex = 2 * index + 2;
+            int smallest = index;
+
+            if (leftChildIndex <= lastIndex && IsLowerCost(_heap[leftChildIndex], _heap[smallest]))
+            {
+                smallest = leftChildIndex;
+            }
+
+            if (rightChildIndex <= lastIndex && IsLowerCost(_heap[rightChildIndex], _heap[smallest]))
+            {
+                smallest = rightChildIndex;
+            }
+
+            if (smallest == index)
+                break;
+
+            _indexInHeap[_heap[index]] = smallest;
+            _indexInHeap[_heap[smallest]] = index;
+
+            (_heap[index], _heap[smallest]) = (_heap[smallest], _heap[index]);
+            index = smallest;
+        }
+    }
+
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    bool IsLowerCost(T lhs, T rhs) => _costs[lhs] < _costs[rhs];
+
+    void SetCapacity(int capacity)
+    {
+        if (capacity <= _capacity)
+            return;
+
+        var heap = CesMemoryUtility.Allocate<T>(capacity, _allocator);
+
+        if (_capacity > 0)
+        {
+            CesMemoryUtility.CopyAndFree(_capacity, heap, _heap, _allocator);
+        }
+
+        _heap = heap;
+        _capacity = capacity;
+    }
+}
+
+public readonly struct EdgesFinals : IDisposable
+    {
+        public readonly int Length;
+
+        public readonly uint2* NodesIndexes;
+
+        public readonly double* DistanceGround;
+        public readonly double* DistanceAir;
+
+        public readonly int* CrossedRiverPointIndex;
+
+        readonly Allocator _allocator;
+
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
+        public EdgesFinals(int length, uint2* nodesIndexes, double* distanceGround, double* distanceAir, int* crossedRiverPointIndex, Allocator allocator)
+        {
+            Length = length;
+            NodesIndexes = nodesIndexes;
+            DistanceGround = distanceGround;
+            DistanceAir = distanceAir;
+            CrossedRiverPointIndex = crossedRiverPointIndex;
+            _allocator = allocator;
+        }
+
+        public void Dispose()
+        {
+            UnsafeUtility.Free(NodesIndexes, _allocator);
+            UnsafeUtility.Free(DistanceGround, _allocator);
+            UnsafeUtility.Free(DistanceAir, _allocator);
+            UnsafeUtility.Free(CrossedRiverPointIndex, _allocator);
+        }
+    }
+
+    public readonly struct NodesFinals : IDisposable
+    {
+        public readonly int Length;
+        public readonly double2* GeoCoord;
+        public readonly NodeOwner* Owner;
+        public readonly RawArray<uint>* EdgesIndexes;
+
+        readonly Allocator _allocator;
+
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
+        public NodesFinals(int length, double2* geoCoord, NodeOwner* owner, RawArray<uint>* edgesIndexes, Allocator allocator)
+        {
+            Length = length;
+            GeoCoord = geoCoord;
+            Owner = owner;
+            EdgesIndexes = edgesIndexes;
+            _allocator = allocator;
+        }
+
+        public void Dispose()
+        {
+            for (int i = 0; i < Length; i++)
+            {
+                EdgesIndexes[i].Dispose();
+            }
+
+            UnsafeUtility.Free(GeoCoord, _allocator);
+            UnsafeUtility.Free(Owner, _allocator);
+            UnsafeUtility.Free(EdgesIndexes, _allocator);
+        }
+    }
+
+    [StructLayout(LayoutKind.Sequential)]
+    public readonly struct NodeOwner
+    {
+        public readonly NodeOwnerType Type;
+        public readonly uint Index;
+
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
+        public NodeOwner(NodeOwnerType type, uint index)
+        {
+            Type = type;
+            Index = index;
+        }
+    }
+
+    public enum NodeOwnerType : uint
+    {
+        Field = 0,
+        River = 10
+    }
+
+    [BurstCompile]
+public unsafe struct CatchmentsJob : IJob
+{
+    const Allocator ALLOCATOR = Allocator.Persistent;
+
+    public EdgesFinals Edges;
+    public NodesFinals Nodes;
+
+    public RawArray<int> NodeToClosestRiverNodeIndex;
+
+    [BurstCompile]
+    public void Execute()
+    {
+        var closedSet = new RawArray<bool>(ALLOCATOR, false, Nodes.Length);
+        var queue = new RawGeoQueue<uint>(Nodes.Length, Nodes.Length, ALLOCATOR);
+        var childToParent = new UnsafeHashMap<uint, uint>(Nodes.Length, ALLOCATOR);
+
+        AddStartings(in Nodes, ref queue);
+
+        while (queue.TryPop(out uint nodeIndexCurrent))
+        {
+        }
+    }
+
+    static void AddStartings(in NodesFinals nodes, ref RawGeoQueue<uint> queue)
+    {
+        for (int i = 0; i < nodes.Length; i++)
+        {
+            if (nodes.Owner[i].Type == NodeOwnerType.River)
+            {
+                queue.Add((uint)i, 0.0);
+            }
+        }
+    }
+}

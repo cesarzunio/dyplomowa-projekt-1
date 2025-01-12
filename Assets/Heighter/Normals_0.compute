@@ -1,0 +1,26 @@
+#pragma kernel CSMain
+
+Texture2D<float> _LandMap;
+Texture2D<float> _HeightMapLand;
+Texture2D<float> _HeightMapWater;
+
+RWTexture2D<float> _Output;
+
+uniform uint _TextureSizeX;
+uniform uint _TextureSizeY;
+
+uniform float _EarthLowest;
+uniform float _EarthHighest;
+
+[numthreads(8, 8, 1)]
+void CSMain (uint3 id : SV_DispatchThreadID)
+{
+    if (id.x >= _TextureSizeX || id.y >= _TextureSizeY)
+        return;
+    
+    bool isLand = _LandMap[id.xy] > 0.5;
+    float heightLand = lerp(0, _EarthHighest, _HeightMapLand[id.xy]);
+    float heightWater = lerp(_EarthLowest, 0, _HeightMapWater[id.xy]);
+    
+    _Output[id.xy] = isLand ? heightLand : heightWater;
+}

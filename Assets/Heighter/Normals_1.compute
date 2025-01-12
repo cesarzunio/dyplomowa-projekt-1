@@ -1,0 +1,16 @@
+#pragma kernel CSMain
+
+Texture2D<float> _HeightMap;
+RWTexture2D<float> _Output;
+
+uniform uint _TextureSizeX;
+uniform uint _TextureSizeY;
+
+uniform float _NormalScale;
+
+[numthreads(8, 8, 1)]
+void CSMain (uint3 id : SV_DispatchThreadID)
+{
+    if (id.x >= _TextureSizeX || id.y >= _TextureSizeY)
+        return;
+}
